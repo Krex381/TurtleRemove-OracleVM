@@ -44,6 +44,10 @@ function Write-SIPolicyForParity {
     $candidates = @(
         (Join-Path $PSScriptRoot "DefaultWindows_Audit_sipolicy.p7b"),
         (Join-Path $PSScriptRoot "DefaultWindows_Enforced_sipolicy.p7b"),
+        (Join-Path $PSScriptRoot "dgreadiness_v3.6\dgreadiness_v3.6\DefaultWindows_Audit_sipolicy.p7b"),
+        (Join-Path $PSScriptRoot "dgreadiness_v3.6\dgreadiness_v3.6\DefaultWindows_Enforced_sipolicy.p7b"),
+        "$env:TEMP\DefaultWindows_Audit_sipolicy.p7b",
+        "$env:TEMP\DefaultWindows_Enforced_sipolicy.p7b",
         "C:\SchildkröteFix\DefaultWindows_Audit_sipolicy.p7b",
         "C:\SchildkröteFix\DefaultWindows_Enforced_sipolicy.p7b"
     )
@@ -55,6 +59,27 @@ function Write-SIPolicyForParity {
     } else {
         Log "INFO: No default SIPolicy.p7b found for parity stage"
     }
+}
+
+function Register-DGOptOutCleanupTask {
+    $cleanupPath = Join-Path $PersistDir "Cleanup-DGOptOut.ps1"
+    $guid = "{0cb3b571-2f2e-4343-a879-d86a476d7215}"
+
+    $cleanupScript = @"
+bcdedit /delete $guid /f 2>&1 | Out-Null
+bcdedit /bootsequence $guid /remove 2>&1 | Out-Null
+Unregister-ScheduledTask -TaskName "Cleanup-DGOptOut" -Confirm:$false -ErrorAction SilentlyContinue
+"@
+
+    Set-Content -Path $cleanupPath -Value $cleanupScript -Encoding UTF8 -Force
+    icacls "$cleanupPath" /inheritance:r 2>&1 | Out-Null
+    icacls "$cleanupPath" /grant:r "SYSTEM:(F)" "Administrators:(F)" 2>&1 | Out-Null
+
+    $action = New-ScheduledTaskAction -Execute "PowerShell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$cleanupPath`""
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+    Register-ScheduledTask -TaskName "Cleanup-DGOptOut" -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
+    Log "OK: Registered one-time DGOptOut cleanup task"
 }
 
 function Set-CapabilityValue {
@@ -176,6 +201,16 @@ function Invoke-ReadyChecks {
 function Invoke-SecConfigFallback {
     Log "Applying SecConfig.efi fallback to clear UEFI lock (next boot)"
 
+    $typed = Read-Host "Type YES to stage firmware-level VBS/CG opt-out (requires pre-boot key confirmation)"
+    if ($typed -ne "YES") {
+        Log "SecConfig fallback skipped by user"
+        return
+    }
+
+    $bcdBackup = Join-Path $LogDir "bcd-backup-$Timestamp.bcd"
+    bcdedit /export "$bcdBackup" 2>&1 | Out-Null
+    Log "OK: Exported BCD backup to $bcdBackup"
+
     $driveLetter = "X:"
     mountvol $driveLetter /s 2>&1 | Out-Null
     Copy-Item "$env:WINDIR\System32\SecConfig.efi" "$driveLetter\EFI\Microsoft\Boot\SecConfig.efi" -Force -ErrorAction SilentlyContinue
@@ -188,7 +223,10 @@ function Invoke-SecConfigFallback {
     bcdedit /set $guid device "partition=$driveLetter" 2>&1 | Out-Null
     mountvol $driveLetter /d 2>&1 | Out-Null
 
+    Register-DGOptOutCleanupTask
+
     Log "OK: SecConfig fallback staged for next reboot"
+    Log "IMPORTANT: On next boot, approve the firmware prompt (F3/F-key) or the change is canceled."
 }
 
 Log "Starting VBS/Hypervisor disable routine"
@@ -404,7 +442,7 @@ if (Test-Path "$env:WINDIR\System32\CodeIntegrity\SIPolicy.p7b") {
 
 Log "P7: Disable Windows features"
 
-$Features = @(
+$TargetFeatures = @(
     "Microsoft-Hyper-V-All",
     "VirtualMachinePlatform",
     "HypervisorPlatform",
@@ -413,14 +451,21 @@ $Features = @(
 )
 
 if (-not (Test-RedstoneOrLater)) {
-    $Features += "IsolatedUserMode"
+    $TargetFeatures += "IsolatedUserMode"
 }
 
+$existingFeatureText = dism /online /Get-Features /format:table 2>&1 | Out-String
 $featureCount = 0
-foreach ($feature in $Features) {
+foreach ($feature in $TargetFeatures) {
+    $isKnown = $existingFeatureText -match [regex]::Escape($feature)
+    if (-not $isKnown) {
+        Log "INFO: Feature '$feature' not present on this OS (skipped)"
+        continue
+    }
+
     $featureCount++
     $output = dism /online /disable-feature /featurename:$feature /norestart 2>&1
-    if (-not ($output -match "successfully|not present|does not exist")) {
+    if (-not ($output -match "successfully|not present|does not exist|Disable Pending")) {
         Log "WARN: Feature '$feature' returned: $($output -join ' ')"
     }
 }
