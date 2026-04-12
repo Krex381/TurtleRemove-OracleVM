@@ -1,5 +1,8 @@
 $ErrorActionPreference = 'Stop'
 
+$DefaultInstallUrl = 'https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/install.ps1'
+$DefaultMainScriptUrl = 'https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/Disable-VirtualBoxTurtle-Full.ps1'
+
 function Test-Admin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($id)
@@ -19,6 +22,10 @@ function Get-InstallUrlFromInvocation {
 function Get-MainScriptUrl {
     param([string]$InstallUrl)
 
+    if (-not $InstallUrl) {
+        return $DefaultMainScriptUrl
+    }
+
     if ($InstallUrl -match '^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/install\.ps1$') {
         $owner = $matches[1]
         $repo = $matches[2]
@@ -26,7 +33,7 @@ function Get-MainScriptUrl {
         return "https://raw.githubusercontent.com/$owner/$repo/$branch/Disable-VirtualBoxTurtle-Full.ps1"
     }
 
-    throw 'Could not determine main script URL from invocation. Use raw GitHub URL format for install.ps1.'
+    return $DefaultMainScriptUrl
 }
 
 try {
@@ -35,9 +42,7 @@ try {
 }
 
 $installUrl = Get-InstallUrlFromInvocation
-if (-not $installUrl) {
-    throw 'Run this installer via: iwr -useb https://raw.githubusercontent.com/<owner>/<repo>/<branch>/install.ps1 | iex'
-}
+if (-not $installUrl) { $installUrl = $DefaultInstallUrl }
 
 if (-not (Test-Admin)) {
     $cmd = "iwr -useb '$installUrl' | iex"
