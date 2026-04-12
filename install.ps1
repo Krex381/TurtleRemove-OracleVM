@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
+$InstallerVersion = '2026.04.12.2'
 $DefaultInstallUrl = 'https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/install.ps1'
 $DefaultMainScriptUrl = 'https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/Disable-VirtualBoxTurtle-Full.ps1'
 
@@ -9,40 +10,13 @@ function Test-Admin {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-function Get-InstallUrlFromInvocation {
-    $line = $MyInvocation.Line
-    if (-not $line) { return $null }
-
-    $pattern = 'https://raw\.githubusercontent\.com/[^\s''"]+/[^\s''"]+/[^\s''"]+/install\.ps1'
-    $m = [regex]::Match($line, $pattern)
-    if ($m.Success) { return $m.Value }
-    return $null
-}
-
-function Get-MainScriptUrl {
-    param([string]$InstallUrl)
-
-    if (-not $InstallUrl) {
-        return $DefaultMainScriptUrl
-    }
-
-    if ($InstallUrl -match '^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)/install\.ps1$') {
-        $owner = $matches[1]
-        $repo = $matches[2]
-        $branch = $matches[3]
-        return "https://raw.githubusercontent.com/$owner/$repo/$branch/Disable-VirtualBoxTurtle-Full.ps1"
-    }
-
-    return $DefaultMainScriptUrl
-}
-
 try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 } catch {
 }
 
-$installUrl = Get-InstallUrlFromInvocation
-if (-not $installUrl) { $installUrl = $DefaultInstallUrl }
+Write-Host "Schildkrote installer v$InstallerVersion"
+$installUrl = $DefaultInstallUrl
 
 if (-not (Test-Admin)) {
     $cmd = "iwr -useb '$installUrl' | iex"
@@ -50,7 +24,7 @@ if (-not (Test-Admin)) {
     return
 }
 
-$mainScriptUrl = Get-MainScriptUrl -InstallUrl $installUrl
+$mainScriptUrl = $DefaultMainScriptUrl
 $tmpScript = Join-Path $env:TEMP 'Disable-VirtualBoxTurtle-Full.ps1'
 
 Invoke-WebRequest -UseBasicParsing -Uri $mainScriptUrl -OutFile $tmpScript
