@@ -37,6 +37,20 @@ Only one parameter is supported:
 - No parameter: runs everything and reboots automatically
 - `-SkipReboot`: runs everything but leaves reboot to you
 
+## One-Liner Install (IEX)
+
+Run directly from GitHub Raw:
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/install.ps1 | iex
+```
+
+Optional no-reboot mode via environment variable:
+
+```powershell
+$env:SCHILDKROTE_SKIP_REBOOT='1'; iwr -useb https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/install.ps1 | iex
+```
+
 ## Verification (After Reboot)
 
 ```powershell
