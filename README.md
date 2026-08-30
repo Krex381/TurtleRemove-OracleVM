@@ -68,6 +68,16 @@ Run the installer from an elevated or normal PowerShell; it self-elevates and us
 
 Remote installation downloads a release-pinned `TurtleFix.ps1` and refuses to execute it unless its SHA-256 matches `install.ps1`.
 
+### One-line install and run
+
+Paste this single line into PowerShell. It downloads the installer to a unique temporary file, verifies the installer SHA-256, runs it through Windows PowerShell with automatic UAC elevation, and removes the temporary file afterward:
+
+```powershell
+$u='https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/install.ps1';$p=Join-Path $env:TEMP ('TurtleFix-install-{0}.ps1' -f [guid]::NewGuid().ToString('N'));try{Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile $p;if((Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash -ne '99208C618C038025E353718F7F3DA6CCBC59E55B3F4D0F6DF6A018F3C3B1510F'){throw 'Installer SHA-256 mismatch'};& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p;if($LASTEXITCODE -ne 0){throw "Installer failed with exit code $LASTEXITCODE"}}finally{Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue}
+```
+
+The interactive safety confirmation still requires `PERMANENT-DISABLE`, and the installer asks before restarting Windows.
+
 ## Restore
 
 Every `Fix` creates a versioned backup under `C:\ProgramData\TurtleFix\backups` and records the latest path. Restore removes TurtleFix enforcement, restores the complete pre-fix BCD store, every managed registry value and optional feature, the original SIPolicy, Device Guard capabilities and any task that previously occupied the TurtleFix task name:
