@@ -73,7 +73,7 @@ Remote installation downloads a release-pinned `TurtleFix.ps1` and refuses to ex
 Paste this single line into PowerShell. It downloads the installer to a unique temporary file, verifies the installer SHA-256, runs it through Windows PowerShell with automatic UAC elevation, and removes the temporary file afterward:
 
 ```powershell
-$u='https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/install.ps1';$p=Join-Path $env:TEMP ('TurtleFix-install-{0}.ps1' -f [guid]::NewGuid().ToString('N'));try{Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile $p;if((Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash -ne '99208C618C038025E353718F7F3DA6CCBC59E55B3F4D0F6DF6A018F3C3B1510F'){throw 'Installer SHA-256 mismatch'};& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p;if($LASTEXITCODE -ne 0){throw "Installer failed with exit code $LASTEXITCODE"}}finally{Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue}
+$u='https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/install.ps1';$p=Join-Path $env:TEMP ('TurtleFix-install-{0}.ps1' -f [guid]::NewGuid().ToString('N'));try{Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile $p;if((Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash -ne '371D1EFBF27FCD9EDC085BDCB3E3AA6C4DD7F486884E4B128A888F5CC05AB5FE'){throw 'Installer SHA-256 mismatch'};& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p;if($LASTEXITCODE -ne 0){throw "Installer failed with exit code $LASTEXITCODE"}}finally{Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue}
 ```
 
 The interactive safety confirmation still requires `PERMANENT-DISABLE`, and the installer asks before restarting Windows.
@@ -93,6 +93,12 @@ Or select a specific state file:
 ```
 
 Driver Verifier is deliberately reset before the fix. Windows does not expose a reliable complete round-trip export of arbitrary verifier configuration, so that one operation is recorded but not reconstructed by `Restore`.
+
+If an older TurtleFix version reported that its automatic rollback failed, use the updated script with the exact `state.json` path printed by that run before starting a new fix:
+
+```powershell
+$u='https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/TurtleFix.ps1';$p=Join-Path $env:TEMP ('TurtleFix-recovery-{0}.ps1' -f [guid]::NewGuid().ToString('N'));try{Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile $p;if((Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash -ne 'D819404188656B6A30EC0ED3FE4718E51F8734D031CD8CC1EBFE5401966DC455'){throw 'TurtleFix SHA-256 mismatch'};& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p -Action Restore -BackupPath 'C:\ProgramData\TurtleFix\backups\...\state.json' -SkipReboot;if($LASTEXITCODE -ne 0){throw "Restore failed with exit code $LASTEXITCODE"}}finally{Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue}
+```
 
 If a later policy recreates the classic `SIPolicy.p7b`, enforcement preserves a hash-named copy under `C:\ProgramData\TurtleFix\quarantine\sipolicy` before removing it.
 
@@ -116,7 +122,7 @@ The repository does not vendor those binaries. TurtleFix retrieves them from the
 
 ## Validation
 
-Both PowerShell 7 and Windows PowerShell 5.1 are supported. The test suite parses all scripts, checks the permanent-disable surface and installer hash, validates backup allowlists and rejects unsafe restore paths:
+Both PowerShell 7 and Windows PowerShell 5.1 are supported. The test suite parses all scripts, checks both integrity-pin layers, exercises native stderr handling and writable registry rollback, validates backup allowlists and rejects unsafe restore paths:
 
 ```powershell
 pwsh -NoProfile -File .\tests\Test-Unit.ps1

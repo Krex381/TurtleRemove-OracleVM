@@ -67,4 +67,52 @@ $rejected = $false
 try { Assert-BackupState $valid (Join-Path $env:TEMP 'outside-state.json') } catch { $rejected = $true }
 if (-not $rejected) { throw 'Restore validation accepted a state file outside the protected backup root.' }
 
-Write-Host 'Unit checks passed for backup, registry and path validation.' -ForegroundColor Green
+$cmdPath = Join-Path $env:SystemRoot 'System32\cmd.exe'
+$nativeSuccess = Invoke-NativeCommand -FilePath $cmdPath -Arguments @('/d', '/c', 'echo benign-stderr 1>&2 & exit /b 0') -AllowFailure
+if ($nativeSuccess.ExitCode -ne 0 -or ($nativeSuccess.Output -join "`n") -notmatch 'benign-stderr') {
+    throw 'Native stderr was not captured without promoting it to a terminating error.'
+}
+$nativeFailure = Invoke-NativeCommand -FilePath $cmdPath -Arguments @('/d', '/c', 'echo expected-failure 1>&2 & exit /b 7') -AllowFailure
+if ($nativeFailure.ExitCode -ne 7 -or ($nativeFailure.Output -join "`n") -notmatch 'expected-failure') {
+    throw 'Allowed native failure did not preserve its exit code and stderr.'
+}
+$rejected = $false
+try { Invoke-NativeCommand -FilePath $cmdPath -Arguments @('/d', '/c', 'exit /b 8') | Out-Null } catch { $rejected = $true }
+if (-not $rejected) { throw 'A disallowed native failure did not throw.' }
+
+$registryTestRoot = 'HKCU:\Software\TurtleFix\Tests'
+$registryTestPath = '{0}\{1}' -f $registryTestRoot, ([guid]::NewGuid().ToString('N'))
+try {
+    Set-RegistryDword -Path $registryTestPath -Name 'ManagedDword' -Value 7
+    $written = Get-RegistryValueState -Path $registryTestPath -Name 'ManagedDword'
+    if (-not $written.Exists -or [int]$written.Value -ne 7 -or $written.Kind -ne 'DWord') {
+        throw 'Writable registry helper did not create the expected DWORD.'
+    }
+
+    Restore-RegistryValue ([pscustomobject]@{ Path = $registryTestPath; Name = 'RestoredValue'; Exists = $true; Kind = 'String'; Value = 'original' })
+    $restored = Get-RegistryValueState -Path $registryTestPath -Name 'RestoredValue'
+    if (-not $restored.Exists -or [string]$restored.Value -ne 'original') {
+        throw 'Registry restore did not write the backed-up value.'
+    }
+
+    Remove-RegistryTarget -Path $registryTestPath -Name 'ManagedDword'
+    if ((Get-RegistryValueState -Path $registryTestPath -Name 'ManagedDword').Exists) {
+        throw 'Registry target removal did not delete the value.'
+    }
+
+    Restore-RegistryValue ([pscustomobject]@{ Path = $registryTestPath; Name = 'RestoredValue'; Exists = $false; Kind = $null; Value = $null })
+    if ((Get-RegistryValueState -Path $registryTestPath -Name 'RestoredValue').Exists) {
+        throw 'Registry rollback did not remove a value absent from the backup.'
+    }
+} finally {
+    if (Test-Path -LiteralPath $registryTestPath) { Remove-Item -LiteralPath $registryTestPath -Recurse -Force }
+    if (Test-Path -LiteralPath $registryTestRoot) {
+        $testRootKey = Get-Item -LiteralPath $registryTestRoot
+        try { $hasRootValues = @($testRootKey.GetValueNames()).Count -gt 0 } finally { $testRootKey.Dispose() }
+        if (-not $hasRootValues -and @(Get-ChildItem -LiteralPath $registryTestRoot).Count -eq 0) {
+            Remove-Item -LiteralPath $registryTestRoot -Force
+        }
+    }
+}
+
+Write-Host 'Unit checks passed for backup, native-command, registry and path validation.' -ForegroundColor Green

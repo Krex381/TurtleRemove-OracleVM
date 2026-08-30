@@ -15,7 +15,7 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
-$script:TurtleFixVersion = '2026.08.30'
+$script:TurtleFixVersion = '2026.08.30.1'
 $script:LatestKnownVirtualBoxVersion = [version]'7.2.16'
 $script:InvocationParameters = @{}
 foreach ($parameterName in $PSBoundParameters.Keys) { $script:InvocationParameters[$parameterName] = $PSBoundParameters[$parameterName] }
@@ -127,8 +127,19 @@ function Invoke-NativeCommand {
         [string[]]$Arguments = @(),
         [switch]$AllowFailure
     )
-    $output = @(& $FilePath @Arguments 2>&1 | ForEach-Object { $_.ToString() })
-    $exitCode = $LASTEXITCODE
+    # PowerShell can promote a native process' stderr records to terminating
+    # errors when the caller uses ErrorActionPreference=Stop. Native tools such
+    # as Microsoft's DG readiness script legitimately emit stderr for optional
+    # registry values and still return success, so capture it and trust the
+    # process exit code instead.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $FilePath @Arguments 2>&1 | ForEach-Object { $_.ToString() })
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
     if (-not $AllowFailure -and $exitCode -ne 0) {
         throw "Command failed ($exitCode): $FilePath $($Arguments -join ' ')`n$($output -join [Environment]::NewLine)"
     }
@@ -182,24 +193,51 @@ function Get-RegistryValueState {
     $state = [ordered]@{ Path = $Path; Name = $Name; Exists = $false; Kind = $null; Value = $null }
     if (-not (Test-Path -LiteralPath $Path)) { return [pscustomobject]$state }
     $key = Get-Item -LiteralPath $Path
-    if (@($key.GetValueNames()) -notcontains $Name) { return [pscustomobject]$state }
-    $state.Exists = $true
-    $state.Kind = $key.GetValueKind($Name).ToString()
-    $state.Value = $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
-    return [pscustomobject]$state
+    try {
+        if (@($key.GetValueNames()) -notcontains $Name) { return [pscustomobject]$state }
+        $state.Exists = $true
+        $state.Kind = $key.GetValueKind($Name).ToString()
+        $state.Value = $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        return [pscustomobject]$state
+    } finally {
+        $key.Dispose()
+    }
+}
+
+function Open-RegistryKeyWritable {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [switch]$Create
+    )
+    $match = [regex]::Match($Path, '^(HKLM|HKCU):\\(.+)$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if (-not $match.Success) { throw "Unsupported registry path: $Path" }
+
+    $rootKey = if ($match.Groups[1].Value -ieq 'HKLM') {
+        [Microsoft.Win32.Registry]::LocalMachine
+    } else {
+        [Microsoft.Win32.Registry]::CurrentUser
+    }
+    $subKey = $match.Groups[2].Value
+    if ($Create) { return $rootKey.CreateSubKey($subKey) }
+    return $rootKey.OpenSubKey($subKey, $true)
 }
 
 function Set-RegistryDword {
     param([string]$Path, [string]$Name, [int]$Value)
-    if (-not (Test-Path -LiteralPath $Path)) { New-Item -Path $Path -Force | Out-Null }
-    New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType DWord -Force | Out-Null
+    $registryKey = Open-RegistryKeyWritable -Path $Path -Create
+    if ($null -eq $registryKey) { throw "Could not open registry key for writing: $Path" }
+    try {
+        $registryKey.SetValue($Name, $Value, [Microsoft.Win32.RegistryValueKind]::DWord)
+    } finally {
+        $registryKey.Dispose()
+    }
 }
 
 function Restore-RegistryValue {
     param($State)
     if ([bool]$State.Exists) {
-        if (-not (Test-Path -LiteralPath $State.Path)) { New-Item -Path $State.Path -Force | Out-Null }
-        $registryKey = Get-Item -LiteralPath $State.Path
+        $registryKey = Open-RegistryKeyWritable -Path ([string]$State.Path) -Create
+        if ($null -eq $registryKey) { throw "Could not open registry key for restore: $($State.Path)" }
         $kind = [Microsoft.Win32.RegistryValueKind]([Enum]::Parse([Microsoft.Win32.RegistryValueKind], [string]$State.Kind))
         $value = switch ([string]$State.Kind) {
             'DWord' { [int]$State.Value }
@@ -208,18 +246,31 @@ function Restore-RegistryValue {
             'MultiString' { [string[]]@($State.Value) }
             default { [string]$State.Value }
         }
-        $registryKey.SetValue([string]$State.Name, $value, $kind)
-    } elseif (Test-Path -LiteralPath $State.Path) {
-        $registryKey = Get-Item -LiteralPath $State.Path
-        $registryKey.DeleteValue([string]$State.Name, $false)
+        try {
+            $registryKey.SetValue([string]$State.Name, $value, $kind)
+        } finally {
+            $registryKey.Dispose()
+        }
+    } else {
+        $registryKey = Open-RegistryKeyWritable -Path ([string]$State.Path)
+        if ($null -eq $registryKey) { return }
+        try {
+            $registryKey.DeleteValue([string]$State.Name, $false)
+        } finally {
+            $registryKey.Dispose()
+        }
     }
 }
 
 function Remove-RegistryTarget {
     param([string]$Path, [string]$Name)
-    if (-not (Test-Path -LiteralPath $Path)) { return }
-    $registryKey = Get-Item -LiteralPath $Path
-    $registryKey.DeleteValue($Name, $false)
+    $registryKey = Open-RegistryKeyWritable -Path $Path
+    if ($null -eq $registryKey) { return }
+    try {
+        $registryKey.DeleteValue($Name, $false)
+    } finally {
+        $registryKey.Dispose()
+    }
 }
 
 function Get-OptionalFeatureStateSafe {

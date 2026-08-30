@@ -48,6 +48,15 @@ if (-not $hashMatch.Success) {
     if ($actualHash -ine $hashMatch.Groups[1].Value) { $failures.Add('Installer SHA-256 does not match TurtleFix.ps1.') }
 }
 
+$readme = Get-Content -LiteralPath (Join-Path $root 'README.md') -Raw
+$oneLineHashMatch = [regex]::Match($readme, "Get-FileHash[^\r\n]+\.Hash\s+-ne\s+'([A-Fa-f0-9]{64})'")
+if (-not $oneLineHashMatch.Success) {
+    $failures.Add('README one-line installer does not contain a finalized SHA-256 value.')
+} else {
+    $actualInstallerHash = (Get-FileHash -LiteralPath (Join-Path $root 'install.ps1') -Algorithm SHA256).Hash
+    if ($actualInstallerHash -ine $oneLineHashMatch.Groups[1].Value) { $failures.Add('README one-line SHA-256 does not match install.ps1.') }
+}
+
 if ($failures.Count -gt 0) {
     $failures | ForEach-Object { Write-Error $_ }
     exit 1

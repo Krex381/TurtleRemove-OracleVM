@@ -9,9 +9,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$installerVersion = '2026.08.30'
+$installerVersion = '2026.08.30.1'
 $rawScriptUrl = 'https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/TurtleFix.ps1'
-$expectedSha256 = 'FEF8C9AFF5BF6BC153E70F28D58CC03D0C0F9D409672B9B31FCA57E636ED8F92'
+$expectedSha256 = 'D819404188656B6A30EC0ED3FE4718E51F8734D031CD8CC1EBFE5401966DC455'
 $script:InvocationParameters = @{}
 foreach ($parameterName in $PSBoundParameters.Keys) { $script:InvocationParameters[$parameterName] = $PSBoundParameters[$parameterName] }
 

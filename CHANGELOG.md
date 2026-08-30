@@ -2,6 +2,8 @@
 
 ## 2026.08.30
 
+- Fixed Microsoft readiness-tool stderr being promoted to a terminating PowerShell error despite a successful native exit code.
+- Fixed backup restore and automatic rollback opening registry keys read-only before `SetValue` or `DeleteValue`.
 - Replaced the former dual boot-profile design with one permanently enforced `PermanentDisable` strategy and removed the Hyper-V fallback profile.
 - Integrated Microsoft's signed Device Guard and Credential Guard Hardware Readiness Tool v3.6 with pinned ZIP and internal-file hashes.
 - Added official UEFI-lock disable staging, VBS/HVCI/Credential Guard/System Guard policy coverage, both BCD launch controls and expanded optional-feature removal.
