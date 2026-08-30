@@ -1,55 +1,73 @@
+[CmdletBinding()]
+param(
+    [ValidateSet('PermanentDisable')]
+    [string]$Strategy = 'PermanentDisable',
+    [switch]$SkipReboot,
+    [switch]$Force,
+    [switch]$DiagnoseOnly,
+    [string]$InstallDirectory = "$env:ProgramFiles\TurtleFix"
+)
+
 $ErrorActionPreference = 'Stop'
+$installerVersion = '2026.08.30'
+$rawScriptUrl = 'https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/TurtleFix.ps1'
+$expectedSha256 = 'FEF8C9AFF5BF6BC153E70F28D58CC03D0C0F9D409672B9B31FCA57E636ED8F92'
+$script:InvocationParameters = @{}
+foreach ($parameterName in $PSBoundParameters.Keys) { $script:InvocationParameters[$parameterName] = $PSBoundParameters[$parameterName] }
 
-$InstallerVersion = '2026.04.12.3'
-$DefaultInstallUrl = 'https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/install.ps1'
-$DefaultMainScriptUrl = 'https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/Disable-VirtualBoxTurtle-Full.ps1'
-$DefaultAuditPolicyUrl = 'https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/DefaultWindows_Audit_sipolicy.p7b'
-$DefaultEnforcedPolicyUrl = 'https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/DefaultWindows_Enforced_sipolicy.p7b'
-
-function Test-Admin {
-    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($id)
+function Test-Administrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-try {
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-} catch {
+function Invoke-ElevatedInstaller {
+    if (-not $PSCommandPath) {
+        throw 'Automatic elevation is unavailable when install.ps1 is piped into Invoke-Expression. Download install.ps1 first, then run it.'
+    }
+    foreach ($value in @($PSCommandPath, $InstallDirectory)) {
+        if ($value -match '["\r\n]') { throw 'An installer process argument contains an unsafe quote or newline.' }
+    }
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $PSCommandPath), '-Strategy', $Strategy, '-InstallDirectory', ('"{0}"' -f $InstallDirectory))
+    foreach ($name in @('SkipReboot', 'Force', 'DiagnoseOnly')) {
+        if ($script:InvocationParameters.ContainsKey($name) -and $script:InvocationParameters[$name]) { $arguments += "-$name" }
+    }
+    $process = Start-Process -FilePath 'PowerShell.exe' -Verb RunAs -ArgumentList $arguments -Wait -PassThru
+    exit $process.ExitCode
 }
 
-Write-Host "Schildkrote installer v$InstallerVersion"
-$installUrl = $DefaultInstallUrl
+Write-Host "TurtleFix installer $installerVersion" -ForegroundColor Cyan
+if (-not (Test-Administrator)) { Invoke-ElevatedInstaller }
 
-if (-not (Test-Admin)) {
-    $cmd = "iwr -useb '$installUrl' | iex"
-    Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd)
-    return
-}
+New-Item -ItemType Directory -Path $InstallDirectory -Force | Out-Null
+$destination = Join-Path $InstallDirectory 'TurtleFix.ps1'
+$localSource = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'TurtleFix.ps1' } else { $null }
 
-$mainScriptUrl = $DefaultMainScriptUrl
-$tmpScript = Join-Path $env:TEMP 'Disable-VirtualBoxTurtle-Full.ps1'
-
-Invoke-WebRequest -UseBasicParsing -Uri $mainScriptUrl -OutFile $tmpScript
-
-# Optional parity policy files from GitHub (best effort)
-$tmpAuditPolicy = Join-Path $env:TEMP 'DefaultWindows_Audit_sipolicy.p7b'
-$tmpEnforcedPolicy = Join-Path $env:TEMP 'DefaultWindows_Enforced_sipolicy.p7b'
-try {
-    Invoke-WebRequest -UseBasicParsing -Uri $DefaultAuditPolicyUrl -OutFile $tmpAuditPolicy
-    Write-Host 'Downloaded DefaultWindows_Audit_sipolicy.p7b'
-} catch {
-    Write-Host 'Audit SIPolicy not found on GitHub (continuing without it)'
-}
-
-try {
-    Invoke-WebRequest -UseBasicParsing -Uri $DefaultEnforcedPolicyUrl -OutFile $tmpEnforcedPolicy
-    Write-Host 'Downloaded DefaultWindows_Enforced_sipolicy.p7b'
-} catch {
-    Write-Host 'Enforced SIPolicy not found on GitHub (continuing without it)'
-}
-
-if ($env:SCHILDKROTE_SKIP_REBOOT -eq '1') {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $tmpScript -SkipReboot
+if ($localSource -and (Test-Path -LiteralPath $localSource)) {
+    Copy-Item -LiteralPath $localSource -Destination $destination -Force
 } else {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $tmpScript
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $temporary = Join-Path $env:TEMP ("TurtleFix-{0}.ps1" -f [guid]::NewGuid().ToString('N'))
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri $rawScriptUrl -OutFile $temporary
+        $actualSha256 = (Get-FileHash -LiteralPath $temporary -Algorithm SHA256).Hash
+        if ($actualSha256 -ine $expectedSha256) {
+            throw "Downloaded TurtleFix.ps1 failed SHA-256 verification. Expected $expectedSha256, received $actualSha256."
+        }
+        Move-Item -LiteralPath $temporary -Destination $destination -Force
+    } finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    }
 }
+
+& icacls.exe $InstallDirectory /inheritance:r | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Failed to remove inherited ACLs from the TurtleFix install directory.' }
+& icacls.exe $InstallDirectory /grant:r '*S-1-5-18:(OI)(CI)(F)' '*S-1-5-32-544:(OI)(CI)(F)' '*S-1-5-32-545:(OI)(CI)(RX)' | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'Failed to apply the TurtleFix install-directory ACL.' }
+
+$action = if ($DiagnoseOnly) { 'Diagnose' } else { 'Fix' }
+$arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $destination, '-Action', $action, '-Strategy', $Strategy)
+if ($SkipReboot) { $arguments += '-SkipReboot' }
+if ($Force) { $arguments += '-Force' }
+& PowerShell.exe @arguments
+exit $LASTEXITCODE

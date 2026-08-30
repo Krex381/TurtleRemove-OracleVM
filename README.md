@@ -1,126 +1,131 @@
-# Schildkrote-Fix (VirtualBox Turtle Fix)
+# TurtleFix 2026
 
-A one-command PowerShell script for Windows 11 that removes the VirtualBox "green turtle" bottleneck by disabling conflicting Hyper-V / VBS layers.
+TurtleFix permanently removes the Microsoft hypervisor path that makes Oracle VirtualBox show the green turtle and run through Windows' Hyper-V compatibility layer. It is designed for Windows 11 and Windows 10 hosts that should always run VirtualBox directly on VT-x/AMD-V.
 
-The goal is simple: get VirtualBox back to native VT-x/AMD-V performance.
+There is one strategy: `PermanentDisable`. TurtleFix does not create a Hyper-V fallback boot entry.
 
-## What It Does
+## What the fix automates
 
-- Disables VBS, HVCI, and Credential Guard related registry settings
-- Disables Hyper-V related optional features that conflict with VirtualBox
-- Sets `hypervisorlaunchtype off` via `bcdedit`
-- Stages a `SecConfig.efi` fallback only after explicit `YES` confirmation if UEFI lock is still enforcing VBS
-- Writes capability/runtime telemetry and detailed logs
-- Creates a startup persistence task so Windows updates do not silently re-enable settings
+`Fix` performs one recoverable, logged workflow and automatically attempts rollback if application fails:
 
-## Target Outcome
+1. Detects Windows, VirtualBox, running VMs, Hyper-V/VBS, optional features, WSL, Docker and BitLocker.
+2. Exports BCD and snapshots every managed registry value, optional feature, active `SIPolicy.p7b`, Device Guard capability key and pre-existing enforcement task.
+3. Suspends BitLocker for one restart when protection is active.
+4. Resets Driver Verifier and calculates Device Guard capability telemetry without turning verifier back on.
+5. Downloads Microsoft Device Guard and Credential Guard Hardware Readiness Tool v3.6 from Microsoft, checks the pinned ZIP and file SHA-256 hashes, and requires a valid Microsoft Authenticode signature.
+6. Stages Microsoft's audit SIPolicy and invokes the official tool's `-Disable` workflow, including its UEFI-lock removal boot sequence when applicable.
+7. Explicitly disables VBS, HVCI, Credential Guard, DMA Guard, System Guard Secure Launch and machine-identity isolation at both runtime and policy registry surfaces.
+8. Disables the Hyper-V hypervisor, Windows Hypervisor Platform, Virtual Machine Platform, Sandbox, Application Guard and Isolated User Mode features when present.
+9. Sets both `hypervisorlaunchtype off` and `vsmlaunchtype off` for the current boot entry.
+10. Restores the legacy Defender UI, Kernel DMA, Storage Health and Exploit Protection policy mutations requested for parity.
+11. Installs a highest-privilege SYSTEM task that idempotently reapplies the permanent configuration and capability telemetry at startup, logon and daily after Windows servicing or policy drift.
+12. Installs a one-shot post-reboot verification task and writes a machine-readable report.
 
-- No green turtle icon in VirtualBox
-- `HypervisorPresent = False`
-- `VirtualizationBasedSecurityStatus = 0`
+The DMA, Storage Health and Defender UI policies are not themselves causes of the VirtualBox turtle. They are included as an explicit compatibility bundle and are independently backed up and restored.
 
-## Requirements
+## Run
 
-- Windows 11 (24H2/25H2 recommended)
-- BIOS/UEFI virtualization enabled
-- Run from an elevated (Administrator) PowerShell session
-
-## Usage
-
-Only one parameter is supported:
+Open PowerShell in this directory:
 
 ```powershell
-.\Disable-VirtualBoxTurtle-Full.ps1
-.\Disable-VirtualBoxTurtle-Full.ps1 -SkipReboot
+.\TurtleFix.ps1 -Action Diagnose
+.\TurtleFix.ps1 -Action Fix
 ```
 
-- No parameter: runs everything and reboots automatically
-- `-SkipReboot`: runs everything but leaves reboot to you
-
-## One-Liner Install (IEX)
-
-Run directly from GitHub Raw:
+Interactive `Fix` requires the exact confirmation `PERMANENT-DISABLE`. For managed execution:
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/install.ps1 | iex
+.\TurtleFix.ps1 -Action Fix -NonInteractive -Force
 ```
 
-Optional no-reboot mode via environment variable:
+Stage everything without restarting immediately:
 
 ```powershell
-$env:SCHILDKROTE_SKIP_REBOOT='1'; iwr -useb https://raw.githubusercontent.com/Krex381/TurtleRemove-OracleVM/main/install.ps1 | iex
+.\TurtleFix.ps1 -Action Fix -SkipReboot
 ```
 
-If present in the repo root, the installer also downloads:
-
-- `DefaultWindows_Audit_sipolicy.p7b`
-- `DefaultWindows_Enforced_sipolicy.p7b`
-
-These files are optional; install continues if they are missing.
-
-## Verification (After Reboot)
+Preview the outer transaction without writing:
 
 ```powershell
-Get-ComputerInfo | Select-Object HypervisorPresent
-Get-CimInstance -ClassName Win32_DeviceGuard -Namespace root\Microsoft\Windows\DeviceGuard |
-  Select-Object VirtualizationBasedSecurityStatus, SecurityServicesRunning
+.\TurtleFix.ps1 -Action Fix -WhatIf
 ```
 
-Expected:
+After the reboot and any firmware confirmation screen:
 
-- `HypervisorPresent` -> `False`
-- `VirtualizationBasedSecurityStatus` -> `0`
-
-## About the F3 / Firmware Prompt
-
-On some systems, Credential Guard can be protected by UEFI lock.
-If that happens, the script stages a `SecConfig.efi` one-time boot fallback.
-If a firmware confirmation screen appears on next boot (F3/F-key prompt), approve it.
-
-Before staging this fallback, the script now:
-
-- Exports a BCD backup to the log folder
-- Asks for explicit `YES` confirmation
-- Registers a one-time startup cleanup task to remove the DGOptOut boot entry
-
-## Recovery (If Boot Gets Stuck / Black Screen)
-
-If the machine does not boot normally after firmware/security changes:
-
-1. Enter WinRE (Advanced Startup) and open Command Prompt.
-2. Restore BCD from backup (replace file name with your latest backup):
-
-```cmd
-bcdedit /import C:\SchildkroteFix\bcd-backup-YYYYMMDD_HHMMSS.bcd
+```powershell
+.\TurtleFix.ps1 -Action Verify
 ```
 
-3. Remove temporary DGOptOut entry (safe even if missing):
+`Verify` succeeds only when Hyper-V and VBS are stopped, both BCD launch controls are `Off`, all managed optional features are disabled, every registry policy and Device Guard capability value is present, the classic SIPolicy is absent and the permanent SYSTEM task exists.
 
-```cmd
-bcdedit /delete {0cb3b571-2f2e-4343-a879-d86a476d7215} /f
-bcdedit /bootsequence {0cb3b571-2f2e-4343-a879-d86a476d7215} /remove
+## Install
+
+Run the installer from an elevated or normal PowerShell; it self-elevates and uses the local `TurtleFix.ps1` when both files are together:
+
+```powershell
+.\install.ps1
 ```
 
-4. Reboot.
-5. If still stuck, temporarily revert recent BIOS security toggles (Secure Boot / virtualization options), then boot and retry with logs.
+Remote installation downloads a release-pinned `TurtleFix.ps1` and refuses to execute it unless its SHA-256 matches `install.ps1`.
 
-## Logs
+## Restore
 
-- Main folder: `C:\SchildkroteFix`
-- Each run creates a timestamped log file
+Every `Fix` creates a versioned backup under `C:\ProgramData\TurtleFix\backups` and records the latest path. Restore removes TurtleFix enforcement, restores the complete pre-fix BCD store, every managed registry value and optional feature, the original SIPolicy, Device Guard capabilities and any task that previously occupied the TurtleFix task name:
 
-## Known Side Effects
+```powershell
+.\TurtleFix.ps1 -Action Restore
+```
 
-- Some Hyper-V-based features may stop working (for example WSL2/HVCI scenarios)
-- Managed devices (Intune/GPO) can re-apply enterprise policies
-- On BitLocker systems, suspending protectors before changes is safer
+Or select a specific state file:
 
-## Safety Note
+```powershell
+.\TurtleFix.ps1 -Action Restore -BackupPath 'C:\ProgramData\TurtleFix\backups\...\state.json'
+```
 
-This script changes security-related system configuration.
-It is intended for personal/lab devices where VirtualBox performance is the priority.
-For corporate devices, validate policy compliance first.
+Driver Verifier is deliberately reset before the fix. Windows does not expose a reliable complete round-trip export of arbitrary verifier configuration, so that one operation is recorded but not reconstructed by `Restore`.
 
-## Why This Repo?
+If a later policy recreates the classic `SIPolicy.p7b`, enforcement preserves a hash-named copy under `C:\ProgramData\TurtleFix\quarantine\sipolicy` before removing it.
 
-Because this should be one clean action, not 30 manual commands.
+## Impact
+
+Permanent disable intentionally breaks or disables workloads that require the Microsoft hypervisor, including WSL 2, Windows Sandbox, Application Guard, Hyper-V VMs and the Hyper-V backend of Docker Desktop. WSL 1 and VirtualBox's native engine do not require Hyper-V.
+
+The diagnosis currently treats Oracle VirtualBox 7.2.16 as the August 2026 baseline and recommends an update for older detected builds.
+
+The official Device Guard tool may stage a pre-OS confirmation to clear Credential Guard or VBS UEFI locks. Accept the displayed disable request locally. BitLocker recovery material should always be available before boot configuration changes.
+
+## Provenance
+
+- Microsoft Device Guard and Credential Guard hardware readiness tool v3.6: `dgreadiness_v3.6.zip`
+- Download SHA-256: `B351BE8E77C8D7994D97B8B9E60EF310EA5873A336FB8D3B5B009379F29BC6FC`
+- Readiness script SHA-256: `C248C7EECF637E9CFEC4353B55336542A1AC13FBB5E58EBD622E4717CFFC09C7`
+- Audit SIPolicy SHA-256: `40B975DA6D6745FFD735C8D0D9644311B099E3458AA07823F505DA109582A13A`
+- Enforced SIPolicy SHA-256: `5835059E0FED0F7DBE7AD482A5033E3726586366D9B27D908B6670AB116D7C0C`
+
+The repository does not vendor those binaries. TurtleFix retrieves them from the pinned Microsoft URL and validates them before use.
+
+## Validation
+
+Both PowerShell 7 and Windows PowerShell 5.1 are supported. The test suite parses all scripts, checks the permanent-disable surface and installer hash, validates backup allowlists and rejects unsafe restore paths:
+
+```powershell
+pwsh -NoProfile -File .\tests\Test-Unit.ps1
+pwsh -NoProfile -File .\tests\Test-Static.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Unit.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-Static.ps1
+```
+
+Real application and post-reboot verification must be performed on an expendable Windows test host because the fix intentionally changes boot and security configuration.
+
+## Primary references
+
+- [Oracle VirtualBox 7.2 manual: using Hyper-V on a Windows host](https://docs.oracle.com/en/virtualization/virtualbox/7.2/user/AdvancedTopics.html)
+- [Oracle VirtualBox 7.2.16 official download directory](https://download.virtualbox.org/virtualbox/7.2.16/)
+- [Microsoft Device Guard readiness tool download](https://www.microsoft.com/en-us/download/details.aspx?id=53337)
+- [Microsoft Credential Guard configuration and UEFI-lock removal](https://learn.microsoft.com/en-us/windows/security/identity-protection/credential-guard/configure)
+- [Microsoft BCDEdit `/set` options](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/bcdedit--set)
+- [Microsoft DeviceGuard Policy CSP](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-deviceguard)
+- [Microsoft DMA Guard Policy CSP](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-dmaguard)
+- [Microsoft Storage Policy CSP](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-storage)
+- [Microsoft Windows Defender Security Center Policy CSP](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-windowsdefendersecuritycenter)
+- [Microsoft Exploit Guard Policy CSP](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-csp-exploitguard)
